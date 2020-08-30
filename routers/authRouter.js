@@ -3,6 +3,7 @@ const { google } = require("googleapis");
 const jwt = require("jsonwebtoken");
 const userModel = require("../models/userModel");
 const authRouter = express.Router();
+
 const googleConfig = {
 	clientId: process.env.GOOGLE_AUTH_CLIENT_ID,
 	clientSecret: process.env.GOOGLE_AUTH_CLIENT_SECRET,
@@ -84,38 +85,47 @@ authRouter.post("/auth/user_login", async (req, res, next) => {
 		}
 	});
 });
+let courseworkList = [];
 authRouter.post("/auth/get_coursework", async (req, res, next) => {
+	const io = require("socket.io")(req.server);
+
 	const classroom = google.classroom({ version: "v1", auth: oauth2Client });
-	const courseworkList = await (
+	courseworkList = await (
 		await classroom.courses.courseWork.list({
 			courseId: req.body.courseID,
 			fields: "courseWork(id,title,description,maxPoints)",
 		})
 	).data["courseWork"];
-	const finalList = [];
-	for (let i = 0; i < courseworkList.length; i++) {
-		const obj = await (
-			await classroom.courses.courseWork.studentSubmissions.list({
-				courseId: req.body.courseID,
-				courseWorkId: courseworkList[i].id,
-				userId: "me",
-				states: "RETURNED",
-				fields: "studentSubmissions(assignedGrade,late)",
-			})
-		).data.studentSubmissions;
-		if (obj) {
-			finalList.push({
-				courseWorkID: courseworkList[i].id,
-				courseWorkTitle: courseworkList[i].title,
-				courseWorkMax: courseworkList[i].maxPoints,
-				courseWorkDescription: courseworkList[i].description,
-				courseWorkGrade: obj[0].assignedGrade,
-				courseWorkLate: obj[0].late,
-			});
-			console.log("Done");
-		}
-	}
-	console.log(finalList);
-	res.send({ gradeList: await finalList });
+
+	res.status(200).send({ courseworkList: courseworkList });
+	io.on("connection", function (socket) {
+		console.log("connected");
+		socket.on("got-list", async function (object) {
+			const courseworkList = object.courseworkList;
+			const classroom = google.classroom({ version: "v1", auth: oauth2Client });
+			for (let i = 0; i < courseworkList.length; i++) {
+				const obj = await (
+					await classroom.courses.courseWork.studentSubmissions.list({
+						courseId: object.courseID,
+						courseWorkId: courseworkList[i].id,
+						userId: "me",
+						states: "RETURNED",
+						fields: "studentSubmissions(assignedGrade,late)",
+					})
+				).data.studentSubmissions;
+				if (obj) {
+					socket.emit("marks", {
+						courseWorkID: courseworkList[i].id,
+						courseWorkTitle: courseworkList[i].title,
+						courseWorkMax: courseworkList[i].maxPoints,
+						courseWorkDescription: courseworkList[i].description,
+						courseWorkGrade: obj[0].assignedGrade,
+						courseWorkLate: obj[0].late,
+					});
+					console.log("Done");
+				}
+			}
+		});
+	});
 });
 module.exports = authRouter;
